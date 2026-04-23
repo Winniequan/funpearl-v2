@@ -4,9 +4,14 @@ import com.funpearl.funpearl.exception.BadRequestException;
 import com.funpearl.funpearl.exception.ResourceNotFoundException;
 import com.funpearl.funpearl.user.dto.ChangePasswordRequest;
 import com.funpearl.funpearl.user.dto.UpdateProfileRequest;
+import com.funpearl.funpearl.user.entity.Role;
 import com.funpearl.funpearl.user.entity.User;
 import com.funpearl.funpearl.user.repository.UserRepository;
 import jakarta.transaction.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -71,6 +76,35 @@ public class UserService {
 
     @Transactional
     public void deleteAccount(Long userId) {
+        User user = findById(userId);
+        userRepository.delete(user);
+    }
+
+    // Admin methods
+    public List<User> findAllUsers() {
+        return userRepository.findAll();
+    }
+
+    public Page<User> findAllUsers(Pageable pageable) {
+        return userRepository.findAll(pageable);
+    }
+
+    @Transactional
+    public User assignRole(Long userId, Role role) {
+        User user = findById(userId);
+        user.getRoles().add(role);
+        return userRepository.save(user);
+    }
+
+    @Transactional
+    public User removeRole(Long userId, Role role) {
+        User user = findById(userId);
+        user.getRoles().remove(role);
+        return userRepository.save(user);
+    }
+
+    @Transactional
+    public void deleteUser(Long userId) {
         User user = findById(userId);
         userRepository.delete(user);
     }
