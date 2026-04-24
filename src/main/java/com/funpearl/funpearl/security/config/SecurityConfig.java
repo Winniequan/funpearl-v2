@@ -25,7 +25,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final CustomUserDetailsService userDetailsService;
-    private final JwtAuthenticationFilter jwtAuthenticationFilter;  // 注入过滤器
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -55,7 +55,6 @@ public class SecurityConfig {
                 )
                 .authenticationProvider(authenticationProvider())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                // ✅ 关键：在 UsernamePasswordAuthenticationFilter 之前添加 JWT 过滤器
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
     }
