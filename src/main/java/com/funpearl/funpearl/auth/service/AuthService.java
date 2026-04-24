@@ -3,12 +3,14 @@ package com.funpearl.funpearl.auth.service;
 import com.funpearl.funpearl.security.jwt.JwtService;
 import com.funpearl.funpearl.auth.dto.AuthResponse;
 import com.funpearl.funpearl.auth.dto.SignupRequest;
+import com.funpearl.funpearl.auth.dto.SignupResponse;
 import com.funpearl.funpearl.auth.dto.LoginRequest;
 import com.funpearl.funpearl.auth.dto.RefreshTokenRequest;
 import com.funpearl.funpearl.auth.dto.TokenRefreshResponse;
 import com.funpearl.funpearl.auth.entity.RefreshToken;
 import com.funpearl.funpearl.exception.BadRequestException;
 import com.funpearl.funpearl.exception.ResourceNotFoundException;
+import com.funpearl.funpearl.exception.UnauthorizedException;
 import com.funpearl.funpearl.user.entity.User;
 import com.funpearl.funpearl.user.repository.UserRepository;
 import jakarta.transaction.Transactional;
@@ -28,12 +30,13 @@ public class AuthService {
     private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
+    private final EmailVerificationService emailVerificationService;
 
     /**
      * Register
      */
     @Transactional
-    public AuthResponse register(SignupRequest signupRequest) {
+    public SignupResponse register(SignupRequest signupRequest) {
         // check user exists or not
         if (userRepository.existsByUsername(signupRequest.getUsername())) {
             throw new BadRequestException("Username already exists");
@@ -51,14 +54,11 @@ public class AuthService {
 
         User savedUser = userRepository.save(newUser);
 
-        String token = loginAndGenerateToken(signupRequest.getUsername(), signupRequest.getPassword());
-        RefreshToken refreshToken = refreshTokenService.createRefreshToken(savedUser.getId());
+        // Create email verification token
+        emailVerificationService.createVerificationToken(savedUser);
 
-        return new AuthResponse(
-                token,
-                refreshToken.getToken(),
-                savedUser.getId(),
-                savedUser.getUsername(),
+        return new SignupResponse(
+                "Registration successful. Please check your email to verify your account.",
                 savedUser.getEmail()
         );
     }
@@ -68,6 +68,18 @@ public class AuthService {
      */
 
     public AuthResponse login(LoginRequest loginRequest) {
+        // Check user exists and account status before authentication
+        User user = userRepository.findByUsername(loginRequest.getUsername())
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        if (!user.isEnabled()) {
+            throw new UnauthorizedException("Account is disabled");
+        }
+
+        if (!user.isEmailVerified()) {
+            throw new UnauthorizedException("Please verify your email before logging in");
+        }
+
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
                         loginRequest.getUsername(),
@@ -77,8 +89,6 @@ public class AuthService {
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         String token = jwtService.generateToken(loginRequest.getUsername());
-
-        User user = userRepository.findByUsername(loginRequest.getUsername()).orElseThrow(() -> new ResourceNotFoundException("User not found"));
         RefreshToken refreshToken = refreshTokenService.createRefreshToken(user.getId());
 
         return new AuthResponse(
@@ -104,13 +114,4 @@ public class AuthService {
     public void logout(Long userId) {
         refreshTokenService.deleteByUserId(userId);
     }
-
-    private String loginAndGenerateToken(String username, String password) {
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(username, password)
-        );
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-        return jwtService.generateToken(username);
-    }
-
 }
