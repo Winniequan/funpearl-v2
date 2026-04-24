@@ -1,5 +1,6 @@
 package com.funpearl.funpearl.user.service;
 
+import com.funpearl.funpearl.auth.service.EmailVerificationService;
 import com.funpearl.funpearl.exception.BadRequestException;
 import com.funpearl.funpearl.exception.ResourceNotFoundException;
 import com.funpearl.funpearl.user.dto.ChangePasswordRequest;
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Service;
 public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final EmailVerificationService emailVerificationService;
 
     public User findById(Long id) {
         return userRepository.findById(id)
@@ -57,9 +59,17 @@ public class UserService {
                 throw new BadRequestException("Email already in use");
             }
             user.setEmail(request.getEmail());
+            user.setEmailVerified(false);
         }
 
-        return userRepository.save(user);
+        User savedUser = userRepository.save(user);
+
+        // Create new verification token if email changed
+        if (!savedUser.isEmailVerified()) {
+            emailVerificationService.createVerificationToken(savedUser);
+        }
+
+        return savedUser;
     }
 
     @Transactional
