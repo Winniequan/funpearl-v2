@@ -13,6 +13,9 @@ import com.funpearl.funpearl.exception.ResourceNotFoundException;
 import com.funpearl.funpearl.exception.UnauthorizedException;
 import com.funpearl.funpearl.user.entity.User;
 import com.funpearl.funpearl.user.repository.UserRepository;
+import com.funpearl.funpearl.audit.service.AuditService;
+import com.funpearl.funpearl.security.RateLimiterService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -31,6 +34,9 @@ public class AuthService {
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
     private final EmailVerificationService emailVerificationService;
+    private final AccountLockoutService accountLockoutService;
+    private final AuditService auditService;
+    private final RateLimiterService rateLimiterService;
 
     /**
      * Register
@@ -67,37 +73,87 @@ public class AuthService {
      * user login
      */
 
-    public AuthResponse login(LoginRequest loginRequest) {
+    public AuthResponse login(LoginRequest loginRequest, HttpServletRequest request) {
+        String ipAddress = getClientIp(request);
+        String userAgent = request.getHeader("User-Agent");
+
+        // Check rate limiting by IP
+        if (rateLimiterService.isBlocked(ipAddress)) {
+            long remainingSeconds = rateLimiterService.getBlockTimeRemainingSeconds(ipAddress);
+            auditService.logLogin(loginRequest.getUsername(), ipAddress, userAgent, false, "Rate limited");
+            throw new UnauthorizedException("Too many login attempts. Please try again in " + remainingSeconds + " seconds");
+        }
+
         // Check user exists and account status before authentication
         User user = userRepository.findByUsername(loginRequest.getUsername())
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+                .orElseThrow(() -> {
+                    rateLimiterService.recordAttempt(ipAddress);
+                    auditService.logLogin(loginRequest.getUsername(), ipAddress, userAgent, false, "User not found");
+                    return new ResourceNotFoundException("Invalid credentials");
+                });
+
+        // Check account lockout
+        if (accountLockoutService.isAccountLocked(user)) {
+            long remainingSeconds = accountLockoutService.getLockoutTimeRemainingSeconds(user);
+            auditService.logLogin(loginRequest.getUsername(), ipAddress, userAgent, false, "Account locked");
+            throw new UnauthorizedException("Account is locked. Please try again in " + remainingSeconds + " seconds");
+        }
 
         if (!user.isEnabled()) {
+            auditService.logLogin(loginRequest.getUsername(), ipAddress, userAgent, false, "Account disabled");
             throw new UnauthorizedException("Account is disabled");
         }
 
         if (!user.isEmailVerified()) {
+            auditService.logLogin(loginRequest.getUsername(), ipAddress, userAgent, false, "Email not verified");
             throw new UnauthorizedException("Please verify your email before logging in");
         }
 
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(
-                        loginRequest.getUsername(),
-                        loginRequest.getPassword()
-                )
-        );
-        SecurityContextHolder.getContext().setAuthentication(authentication);
+        try {
+            Authentication authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(
+                            loginRequest.getUsername(),
+                            loginRequest.getPassword()
+                    )
+            );
+            SecurityContextHolder.getContext().setAuthentication(authentication);
 
-        String token = jwtService.generateToken(loginRequest.getUsername());
-        RefreshToken refreshToken = refreshTokenService.createRefreshToken(user.getId());
+            // Reset failed attempts on successful login
+            accountLockoutService.resetFailedAttempts(user);
+            rateLimiterService.resetAttempts(ipAddress);
 
-        return new AuthResponse(
-                token,
-                refreshToken.getToken(),
-                user.getId(),
-                user.getUsername(),
-                user.getEmail()
-        );
+            String token = jwtService.generateToken(loginRequest.getUsername());
+            RefreshToken refreshToken = refreshTokenService.createRefreshToken(user.getId());
+
+            auditService.logLogin(loginRequest.getUsername(), ipAddress, userAgent, true, null);
+
+            return new AuthResponse(
+                    token,
+                    refreshToken.getToken(),
+                    user.getId(),
+                    user.getUsername(),
+                    user.getEmail()
+            );
+        } catch (Exception e) {
+            // Record failed attempt
+            rateLimiterService.recordAttempt(ipAddress);
+            accountLockoutService.recordFailedAttempt(user);
+
+            if (accountLockoutService.isAccountLocked(user)) {
+                auditService.logAccountLocked(loginRequest.getUsername(), ipAddress, "Max failed attempts reached");
+            }
+
+            auditService.logLogin(loginRequest.getUsername(), ipAddress, userAgent, false, "Invalid password");
+            throw new UnauthorizedException("Invalid credentials");
+        }
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String xForwardedFor = request.getHeader("X-Forwarded-For");
+        if (xForwardedFor != null && !xForwardedFor.isEmpty()) {
+            return xForwardedFor.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     public TokenRefreshResponse refreshToken(RefreshTokenRequest request) {

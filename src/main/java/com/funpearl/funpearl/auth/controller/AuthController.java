@@ -10,6 +10,10 @@ import com.funpearl.funpearl.auth.dto.SignupRequest;
 import com.funpearl.funpearl.auth.dto.LoginRequest;
 import com.funpearl.funpearl.security.CustomUserDetails;
 
+import com.funpearl.funpearl.auth.dto.ForgotPasswordRequest;
+import com.funpearl.funpearl.auth.dto.ResetPasswordRequest;
+import com.funpearl.funpearl.auth.service.PasswordResetService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +27,7 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
     private final AuthService authService;
     private final EmailVerificationService emailVerificationService;
+    private final PasswordResetService passwordResetService;
 
     @PostMapping("/signup")
     public SignupResponse signup(@Valid @RequestBody SignupRequest signupRequest) {
@@ -30,8 +35,20 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public AuthResponse login(@Valid @RequestBody LoginRequest loginRequest) {
-        return authService.login(loginRequest);
+    public AuthResponse login(@Valid @RequestBody LoginRequest loginRequest, HttpServletRequest request) {
+        return authService.login(loginRequest, request);
+    }
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<String> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        passwordResetService.createPasswordResetToken(request.getEmail());
+        return ResponseEntity.ok("Password reset email sent. Please check your inbox.");
+    }
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<String> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        passwordResetService.resetPassword(request.getToken(), request.getNewPassword());
+        return ResponseEntity.ok("Password reset successfully");
     }
 
     @PostMapping("/refresh")
